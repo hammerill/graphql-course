@@ -1,34 +1,27 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { 
   Users, 
   Plus, 
   X, 
   User,
-  Mail,
   Shield,
   CheckCircle,
   Edit,
   Trash2,
-  Search,
-  Filter
+  Search
 } from 'lucide-react';
 import Modal from './Modal';
+import { useMutation, useQuery } from '@apollo/client';
+import { ADD_USER, DELETE_USER, GET_USERS, UPDATE_USER } from '../queries';
 
-// TODO: Définir les interfaces TypeScript pour les utilisateurs
 interface UserFormData {
   name: string;
-  email: string;
-  role: string;
+  password: string;
 }
 
 interface User {
   id: string;
   name: string;
-  email: string;
-  role: string;
-  eventsOrganized: number;
-  eventsAttended: number;
-  joinDate: string;
 }
 
 interface UserManagerProps {
@@ -46,59 +39,53 @@ const UserManager: React.FC<UserManagerProps> = ({
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
   
-  const [formData, setFormData] = useState<UserFormData>({
+  const [createForm, setCreateForm] = useState<UserFormData>({
     name: '',
-    email: '',
-    role: 'Participant'
+    password: ''
   });
 
-  // TODO: Récupérer les utilisateurs via GraphQL
-  const mockUsers: User[] = [
-    { 
-      id: '1', 
-      name: 'Alice Dupont',
-      email: 'alice.dupont@example.com',
-      role: 'Organisateur',
-      eventsOrganized: 5,
-      eventsAttended: 12,
-      joinDate: '2024-01-15'
-    },
-    { 
-      id: '2', 
-      name: 'Bob Martin',
-      email: 'bob.martin@example.com',
-      role: 'Participant',
-      eventsOrganized: 2,
-      eventsAttended: 8,
-      joinDate: '2024-03-22'
-    },
-    { 
-      id: '3', 
-      name: 'Claire Durand',
-      email: 'claire.durand@example.com',
-      role: 'Organisateur',
-      eventsOrganized: 3,
-      eventsAttended: 15,
-      joinDate: '2023-11-08'
-    },
-    { 
-      id: '4', 
-      name: 'David Leroy',
-      email: 'david.leroy@example.com',
-      role: 'Participant',
-      eventsOrganized: 0,
-      eventsAttended: 4,
-      joinDate: '2024-06-12'
+  const [editForm, setEditForm] = useState<UserFormData>({
+    name: '',
+    password: ''
+  });
+
+  const { data: usersData, loading: usersLoading, error: usersError, refetch: refetchUsers } = useQuery<{ users: User[] }>(GET_USERS);
+
+  const [addUser, { loading: addUserLoading }] = useMutation(ADD_USER, {
+    onCompleted: async () => {
+      await refetchUsers();
+      onUserCreated?.();
     }
-  ];
+  });
 
-  const roles = ['Participant', 'Organisateur', 'Administrateur'];
+  const [updateUserMutation, { loading: updateUserLoading }] = useMutation(UPDATE_USER, {
+    onCompleted: async () => {
+      await refetchUsers();
+      onUserUpdated?.();
+    }
+  });
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const [deleteUserMutation, { loading: deleteUserLoading }] = useMutation(DELETE_USER, {
+    onCompleted: async () => {
+      await refetchUsers();
+      onUserDeleted?.();
+    }
+  });
+
+  const users = usersData?.users ?? [];
+
+  const handleCreateInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
+    setCreateForm(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEditForm(prev => ({
       ...prev,
       [name]: value
     }));
@@ -106,60 +93,71 @@ const UserManager: React.FC<UserManagerProps> = ({
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // TODO: Remplacer par une vraie mutation GraphQL
-    console.log('Simulation - Création utilisateur:', formData);
-    
+
+    if (!createForm.name || !createForm.password) {
+      alert('Veuillez renseigner un nom et un mot de passe.');
+      return;
+    }
+
     try {
-      // TODO: Utiliser la mutation GraphQL CREATE_USER
-      alert('✅ Utilisateur créé avec succès ! (Simulation - TODO: GraphQL)');
-      
-      // Reset du formulaire
-      setFormData({
+      await addUser({
+        variables: {
+          input: {
+            name: createForm.name,
+            password: createForm.password
+          }
+        }
+      });
+
+      alert('✅ Utilisateur créé avec succès !');
+
+      setCreateForm({
         name: '',
-        email: '',
-        role: 'Participant'
+        password: ''
       });
       setShowCreateForm(false);
-      
-      if (onUserCreated) {
-        onUserCreated();
-      }
-      
     } catch (error) {
       console.error('Erreur lors de la création:', error);
-      alert('❌ Erreur lors de la création (TODO: Gérer les erreurs GraphQL)');
+      alert('❌ Erreur lors de la création de l\'utilisateur.');
     }
   };
 
   const handleEditUser = (user: User) => {
     setEditingUser(user);
-    setFormData({
+    setEditForm({
       name: user.name,
-      email: user.email,
-      role: user.role
+      password: ''
     });
     setShowEditModal(true);
   };
 
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // TODO: Remplacer par une vraie mutation GraphQL
-    console.log('Simulation - Modification utilisateur:', editingUser?.id, formData);
-    
+    if (!editingUser) return;
+
     try {
-      alert('✅ Utilisateur modifié avec succès ! (Simulation - TODO: GraphQL)');
+      const input: { name?: string; password?: string } = {};
+      if (editForm.name && editForm.name !== editingUser.name) {
+        input.name = editForm.name;
+      }
+      if (editForm.password) {
+        input.password = editForm.password;
+      }
+
+      await updateUserMutation({
+        variables: {
+          id: editingUser.id,
+          input
+        }
+      });
+
+      alert('✅ Utilisateur modifié avec succès !');
       setShowEditModal(false);
       setEditingUser(null);
-      
-      if (onUserUpdated) {
-        onUserUpdated();
-      }
-      
+      setEditForm({ name: '', password: '' });
     } catch (error) {
       console.error('Erreur lors de la modification:', error);
-      alert('❌ Erreur lors de la modification (TODO: Gérer les erreurs GraphQL)');
+      alert('❌ Erreur lors de la modification de l\'utilisateur.');
     }
   };
 
@@ -167,29 +165,35 @@ const UserManager: React.FC<UserManagerProps> = ({
     if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')) {
       return;
     }
-    
-    // TODO: Remplacer par une vraie mutation GraphQL
-    console.log('Simulation - Suppression utilisateur:', userId);
-    
+
     try {
-      alert('✅ Utilisateur supprimé avec succès ! (Simulation - TODO: GraphQL)');
-      
-      if (onUserDeleted) {
-        onUserDeleted();
-      }
-      
+      await deleteUserMutation({
+        variables: { id: userId }
+      });
+
+      alert('✅ Utilisateur supprimé avec succès !');
     } catch (error) {
       console.error('Erreur lors de la suppression:', error);
-      alert('❌ Erreur lors de la suppression (TODO: Gérer les erreurs GraphQL)');
+      alert('❌ Erreur lors de la suppression de l\'utilisateur.');
     }
   };
 
-  const filteredUsers = mockUsers.filter(user => {
-    const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         user.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesRole = roleFilter === 'all' || user.role === roleFilter;
-    return matchesSearch && matchesRole;
-  });
+  const filteredUsers = useMemo(() => {
+    return users.filter(user =>
+      user.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [users, searchTerm]);
+
+  const isLoading = usersLoading || addUserLoading || updateUserLoading || deleteUserLoading;
+  const errorMessage = usersError?.message ?? '';
+
+  if (isLoading && users.length === 0) {
+    return <div className="loading">Chargement des utilisateurs...</div>;
+  }
+
+  if (errorMessage && users.length === 0) {
+    return <div className="error">Erreur lors du chargement des utilisateurs : {errorMessage}</div>;
+  }
 
   return (
     <div className="user-manager">
@@ -198,7 +202,10 @@ const UserManager: React.FC<UserManagerProps> = ({
           <Users size={20} />
           Gestion des Utilisateurs
         </h3>
-        <span className="mock-data-indicator">Interface factice - TODO: GraphQL</span>
+        <span className="mock-data-indicator">Données GraphQL</span>
+        {isLoading && users.length > 0 && (
+          <span className="loading-indicator">Mise à jour...</span>
+        )}
       </div>
 
       <div className="manager-actions">
@@ -230,20 +237,6 @@ const UserManager: React.FC<UserManagerProps> = ({
               className="search-input"
             />
           </div>
-          
-          <div className="filter-container">
-            <Filter size={16} />
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value)}
-              className="filter-select"
-            >
-              <option value="all">Tous les rôles</option>
-              {roles.map(role => (
-                <option key={role} value={role}>{role}</option>
-              ))}
-            </select>
-          </div>
         </div>
       </div>
 
@@ -251,71 +244,54 @@ const UserManager: React.FC<UserManagerProps> = ({
         <div className="user-form-container">
           <h4>Créer un nouvel utilisateur</h4>
           <p className="form-help">
-            💡 Ce formulaire est fonctionnel mais utilise des données factices.
+            💡 Le serveur requiert uniquement un <strong>nom</strong> et un <strong>mot de passe</strong>.
           </p>
           
           <form onSubmit={handleCreateUser} className="user-form">
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="name">
-                  <User size={16} />
-                  Nom complet *
-                </label>
-                <input
-                  type="text"
-                  id="name"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  placeholder="Ex: Jean Dupont"
-                  required
-                />
-              </div>
-              
-              <div className="form-group">
-                <label htmlFor="email">
-                  <Mail size={16} />
-                  Email *
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleInputChange}
-                  placeholder="Ex: jean.dupont@example.com"
-                  required
-                />
-              </div>
+            <div className="form-group">
+              <label htmlFor="name">
+                <User size={16} />
+                Nom complet *
+              </label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={createForm.name}
+                onChange={handleCreateInputChange}
+                placeholder="Ex: Jean Dupont"
+                required
+              />
             </div>
 
             <div className="form-group">
-              <label htmlFor="role">
+              <label htmlFor="password">
                 <Shield size={16} />
-                Rôle *
+                Mot de passe *
               </label>
-              <select
-                id="role"
-                name="role"
-                value={formData.role}
-                onChange={handleInputChange}
+              <input
+                type="password"
+                id="password"
+                name="password"
+                value={createForm.password}
+                onChange={handleCreateInputChange}
+                placeholder="Définissez un mot de passe"
                 required
-              >
-                {roles.map(role => (
-                  <option key={role} value={role}>{role}</option>
-                ))}
-              </select>
+              />
             </div>
 
             <div className="form-actions">
-              <button type="submit" className="btn-submit">
+              <button type="submit" className="btn-submit" disabled={addUserLoading}>
                 <CheckCircle size={16} />
-                Créer l'utilisateur
+                {addUserLoading ? 'Création...' : "Créer l'utilisateur"}
               </button>
               <button 
                 type="button" 
                 className="btn-cancel"
-                onClick={() => setShowCreateForm(false)}
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setCreateForm({ name: '', password: '' });
+                }}
               >
                 <X size={16} />
                 Annuler
@@ -340,9 +316,9 @@ const UserManager: React.FC<UserManagerProps> = ({
                   </div>
                   <div>
                     <h5>{user.name}</h5>
-                    <p>{user.email}</p>
-                    <span className={`role-badge ${user.role.toLowerCase()}`}>
-                      {user.role}
+                    <p className="user-meta">ID: {user.id}</p>
+                    <span className="role-badge membre">
+                      Compte GraphQL
                     </span>
                   </div>
                 </div>
@@ -359,28 +335,20 @@ const UserManager: React.FC<UserManagerProps> = ({
                     className="btn-icon btn-delete"
                     onClick={() => handleDeleteUser(user.id)}
                     title="Supprimer"
+                    disabled={deleteUserLoading}
                   >
                     <Trash2 size={16} />
                   </button>
                 </div>
               </div>
               
-              <div className="user-stats-mini">
-                <div className="stat-mini">
-                  <span>{user.eventsOrganized}</span>
-                  <small>Organisés</small>
-                </div>
-                <div className="stat-mini">
-                  <span>{user.eventsAttended}</span>
-                  <small>Participés</small>
-                </div>
-                <div className="stat-mini">
-                  <span>{new Date(user.joinDate).toLocaleDateString('fr-FR')}</span>
-                  <small>Inscription</small>
-                </div>
-              </div>
             </div>
           ))}
+          {filteredUsers.length === 0 && (
+            <div className="empty-state">
+              Aucun utilisateur ne correspond à votre recherche.
+            </div>
+          )}
         </div>
       </div>
 
@@ -390,6 +358,7 @@ const UserManager: React.FC<UserManagerProps> = ({
         onClose={() => {
           setShowEditModal(false);
           setEditingUser(null);
+          setEditForm({ name: '', password: '' });
         }}
         title="Modifier l'utilisateur"
         size="medium"
@@ -405,54 +374,40 @@ const UserManager: React.FC<UserManagerProps> = ({
                 type="text"
                 id="edit-name"
                 name="name"
-                value={formData.name}
-                onChange={handleInputChange}
+                value={editForm.name}
+                onChange={handleEditInputChange}
                 required
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="edit-email">
-                <Mail size={16} />
-                Email *
+              <label htmlFor="edit-password">
+                <Shield size={16} />
+                Nouveau mot de passe
               </label>
               <input
-                type="email"
-                id="edit-email"
-                name="email"
-                value={formData.email}
-                onChange={handleInputChange}
-                required
+                type="password"
+                id="edit-password"
+                name="password"
+                value={editForm.password}
+                onChange={handleEditInputChange}
+                placeholder="Laissez vide pour conserver l'ancien"
               />
             </div>
 
-            <div className="form-group">
-              <label htmlFor="edit-role">
-                <Shield size={16} />
-                Rôle *
-              </label>
-              <select
-                id="edit-role"
-                name="role"
-                value={formData.role}
-                onChange={handleInputChange}
-                required
-              >
-                {roles.map(role => (
-                  <option key={role} value={role}>{role}</option>
-                ))}
-              </select>
-            </div>
-
             <div className="form-actions">
-              <button type="submit" className="btn-submit">
+              <button type="submit" className="btn-submit" disabled={updateUserLoading}>
                 <CheckCircle size={16} />
-                Sauvegarder
+                {updateUserLoading ? 'Sauvegarde...' : 'Sauvegarder'}
               </button>
               <button 
                 type="button" 
                 className="btn-cancel"
-                onClick={() => setShowEditModal(false)}
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingUser(null);
+                  setEditForm({ name: '', password: '' });
+                }}
               >
                 <X size={16} />
                 Annuler

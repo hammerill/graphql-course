@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { 
   Settings, 
   Plus, 
@@ -10,8 +10,6 @@ import {
   MapPin,
   Users,
   Type,
-  FileText,
-  Hash,
   Target,
   Edit,
   Trash2,
@@ -19,35 +17,49 @@ import {
 } from 'lucide-react';
 import Modal from './Modal';
 import UserManager from './UserManager';
-// TODO: Importer useMutation depuis @apollo/client
-// import { useMutation } from '@apollo/client';
-// TODO: Importer vos mutations GraphQL depuis '../queries'
-// import { CREATE_EVENT, UPDATE_EVENT, DELETE_EVENT } from '../queries';
+import { useMutation, useQuery } from '@apollo/client';
+import { ADD_EVENT, DELETE_EVENT, GET_EVENTS, GET_USERS, UPDATE_EVENT } from '../queries';
 
-// TODO: Définir les interfaces TypeScript pour le formulaire
 interface EventFormData {
   title: string;
-  description: string;
-  date: string;
-  location: string;
-  maxParticipants: number;
-  category: string;
+  start: string;
+  end: string;
+  organizerId: string;
+  participantIds: string[];
 }
 
-interface Event {
+interface DateRange {
+  start: string;
+  end: string;
+}
+
+interface EventUser {
+  id: string;
+  name: string;
+}
+
+interface GraphQLEvent {
   id: string;
   title: string;
-  description: string;
-  date: string;
-  location: string;
-  maxParticipants: number;
+  date: DateRange;
+  organizer: EventUser;
+  participants?: EventUser[];
+}
+
+interface EventWithMeta extends GraphQLEvent {
+  description?: string;
+  location?: string;
+  category?: string;
   currentParticipants: number;
-  category: string;
-  organizer: {
-    id: string;
-    name: string;
-    email: string;
-  };
+  maxParticipants?: number;
+}
+
+interface EventsData {
+  events: GraphQLEvent[];
+}
+
+interface UsersData {
+  users: EventUser[];
 }
 
 interface EventManagerProps {
@@ -61,138 +73,168 @@ const EventManager: React.FC<EventManagerProps> = ({
   onEventUpdated, 
   onEventDeleted 
 }) => {
-  // TODO: Utiliser useMutation pour créer/modifier/supprimer des événements
-  // const [createEvent] = useMutation(CREATE_EVENT);
-  // const [updateEvent] = useMutation(UPDATE_EVENT);
-  // const [deleteEvent] = useMutation(DELETE_EVENT);
-
   const [activeSection, setActiveSection] = useState<'events' | 'users'>('events');
   const [showEventForm, setShowEventForm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editingEvent, setEditingEvent] = useState<Event | null>(null);
+  const [editingEvent, setEditingEvent] = useState<EventWithMeta | null>(null);
   const [showAssignModal, setShowAssignModal] = useState(false);
-  const [assigningEvent, setAssigningEvent] = useState<Event | null>(null);
+  const [assigningEvent, setAssigningEvent] = useState<EventWithMeta | null>(null);
+  const [assignParticipants, setAssignParticipants] = useState<string[]>([]);
   
   const [formData, setFormData] = useState<EventFormData>({
     title: '',
-    description: '',
-    date: '',
-    location: '',
-    maxParticipants: 50,
-    category: 'Workshop'
+    start: '',
+    end: '',
+    organizerId: '',
+    participantIds: []
   });
 
-  // TODO: Récupérer les événements via GraphQL
-  const mockEvents: Event[] = [
-    {
-      id: '1',
-      title: 'Workshop GraphQL pour débutants',
-      description: 'Apprenez les bases de GraphQL avec des exercices pratiques.',
-      date: '2025-10-15T14:00',
-      location: 'Paris, France',
-      maxParticipants: 30,
-      currentParticipants: 18,
-      category: 'Workshop',
-      organizer: { 
-        id: '1', 
-        name: 'Alice Dupont', 
-        email: 'alice.dupont@example.com' 
-      }
-    },
-    {
-      id: '2',
-      title: 'Conférence React + GraphQL',
-      description: 'Découvrez comment intégrer GraphQL dans vos applications React.',
-      date: '2025-11-20T09:00',
-      location: 'Lyon, France',
-      maxParticipants: 100,
-      currentParticipants: 45,
-      category: 'Conférence',
-      organizer: { 
-        id: '2', 
-        name: 'Bob Martin', 
-        email: 'bob.martin@example.com' 
-      }
-    }
-  ];
+  const { data: eventsData, loading: eventsLoading, error: eventsError, refetch: refetchEvents } = useQuery<EventsData>(GET_EVENTS);
+  const { data: usersData, loading: usersLoading, error: usersError } = useQuery<UsersData>(GET_USERS);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
+  const [addEvent, { loading: addEventLoading }] = useMutation(ADD_EVENT, {
+    onCompleted: async () => {
+      await refetchEvents();
+      onEventCreated?.();
+    }
+  });
+
+  const [updateEventMutation, { loading: updateEventLoading }] = useMutation(UPDATE_EVENT, {
+    onCompleted: async () => {
+      await refetchEvents();
+      onEventUpdated?.();
+    }
+  });
+
+  const [deleteEventMutation, { loading: deleteEventLoading }] = useMutation(DELETE_EVENT, {
+    onCompleted: async () => {
+      await refetchEvents();
+      onEventDeleted?.();
+    }
+  });
+
+  const users = usersData?.users ?? [];
+
+  const mappedEvents: EventWithMeta[] = useMemo(() => {
+    return (eventsData?.events ?? []).map((event) => ({
+      ...event,
+      description: event.title,
+      location: 'Lieu non communiqué',
+      category: 'Général',
+      currentParticipants: event.participants?.length ?? 0,
+      maxParticipants: undefined,
+    }));
+  }, [eventsData]);
+
+  const formatDateTimeLocal = (value: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    const offset = date.getTimezoneOffset();
+    const offsetDate = new Date(date.getTime() - offset * 60000);
+    return offsetDate.toISOString().slice(0, 16);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, selectedOptions } = e.target;
+    if (name === 'participantIds') {
+      const values = Array.from(selectedOptions).map(option => option.value);
+      setFormData(prev => ({
+        ...prev,
+        participantIds: values
+      }));
+      return;
+    }
+
     setFormData(prev => ({
       ...prev,
-      [name]: name === 'maxParticipants' ? parseInt(value) || 0 : value
+      [name]: value
     }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // TODO: Remplacer cette simulation par une vraie mutation GraphQL
-    console.log('Simulation - Données à envoyer via GraphQL:', formData);
-    
+
+    const { title, start, end, organizerId, participantIds } = formData;
+    if (!organizerId) {
+      alert('Veuillez sélectionner un organisateur.');
+      return;
+    }
+
     try {
-      // TODO: Utiliser la mutation GraphQL
-      // await createEvent({ 
-      //   variables: { 
-      //     input: formData 
-      //   } 
-      // });
-      
-      // Simulation d'une création réussie
-      alert('✅ Événement créé avec succès ! (Simulation - TODO: GraphQL)');
-      
-      // Reset du formulaire
+      await addEvent({
+        variables: {
+          input: {
+            title,
+            date: {
+              start,
+              end: end || start
+            },
+            organizerId,
+            participantIds
+          }
+        }
+      });
+
+      alert('✅ Événement créé avec succès !');
+
       setFormData({
         title: '',
-        description: '',
-        date: '',
-        location: '',
-        maxParticipants: 50,
-        category: 'Workshop'
+        start: '',
+        end: '',
+        organizerId: '',
+        participantIds: []
       });
       setShowEventForm(false);
-      
-      // Callback pour rafraîchir la liste
-      if (onEventCreated) {
-        onEventCreated();
-      }
-      
     } catch (error) {
       console.error('Erreur lors de la création:', error);
-      alert('❌ Erreur lors de la création (TODO: Gérer les erreurs GraphQL)');
+      alert('❌ Erreur lors de la création de l\'événement.');
     }
   };
 
-  const handleEditEvent = (event: Event) => {
+  const handleEditEvent = (event: EventWithMeta) => {
     setEditingEvent(event);
     setFormData({
       title: event.title,
-      description: event.description,
-      date: event.date,
-      location: event.location,
-      maxParticipants: event.maxParticipants,
-      category: event.category
+      start: formatDateTimeLocal(event.date.start),
+      end: formatDateTimeLocal(event.date.end),
+      organizerId: event.organizer.id,
+      participantIds: (event.participants ?? []).map(participant => participant.id)
     });
     setShowEditModal(true);
   };
 
   const handleUpdateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    console.log('Simulation - Modification événement:', editingEvent?.id, formData);
-    
+    if (!editingEvent) {
+      return;
+    }
+
+    const { title, start, end, organizerId, participantIds } = formData;
     try {
-      alert('✅ Événement modifié avec succès ! (Simulation - TODO: GraphQL)');
+      await updateEventMutation({
+        variables: {
+          id: editingEvent.id,
+          input: {
+            title,
+            date: {
+              start,
+              end: end || start
+            },
+            organizerId,
+            participantIds
+          }
+        }
+      });
+
+      alert('✅ Événement modifié avec succès !');
       setShowEditModal(false);
       setEditingEvent(null);
-      
-      if (onEventUpdated) {
-        onEventUpdated();
-      }
-      
     } catch (error) {
       console.error('Erreur lors de la modification:', error);
-      alert('❌ Erreur lors de la modification (TODO: Gérer les erreurs GraphQL)');
+      alert('❌ Erreur lors de la modification de l\'événement.');
     }
   };
 
@@ -200,28 +242,66 @@ const EventManager: React.FC<EventManagerProps> = ({
     if (!confirm('Êtes-vous sûr de vouloir supprimer cet événement ?')) {
       return;
     }
-    
-    console.log('Simulation - Suppression événement:', eventId);
-    
+
     try {
-      alert('✅ Événement supprimé avec succès ! (Simulation - TODO: GraphQL)');
-      
-      if (onEventDeleted) {
-        onEventDeleted();
-      }
-      
+      await deleteEventMutation({
+        variables: { id: eventId }
+      });
+
+      alert('✅ Événement supprimé avec succès !');
     } catch (error) {
       console.error('Erreur lors de la suppression:', error);
-      alert('❌ Erreur lors de la suppression (TODO: Gérer les erreurs GraphQL)');
+      alert('❌ Erreur lors de la suppression de l\'événement.');
     }
   };
 
-  const handleAssignUsers = (event: Event) => {
+  const handleAssignUsers = (event: EventWithMeta) => {
     setAssigningEvent(event);
+    setAssignParticipants((event.participants ?? []).map(participant => participant.id));
     setShowAssignModal(true);
   };
 
-  const categories = ['Workshop', 'Conférence', 'Hackathon', 'Meetup', 'Formation'];
+  const handleAssignChange = (userId: string, checked: boolean) => {
+    setAssignParticipants((prev) => {
+      if (checked) {
+        return prev.includes(userId) ? prev : [...prev, userId];
+      }
+      return prev.filter(id => id !== userId);
+    });
+  };
+
+  const handleAssignSave = async () => {
+    if (!assigningEvent) return;
+
+    try {
+      await updateEventMutation({
+        variables: {
+          id: assigningEvent.id,
+          input: {
+            participantIds: assignParticipants
+          }
+        }
+      });
+
+      alert('✅ Participants mis à jour !');
+      setShowAssignModal(false);
+      setAssigningEvent(null);
+    } catch (error) {
+      console.error('Erreur lors de l\'assignation:', error);
+      alert('❌ Erreur lors de la mise à jour des participants.');
+    }
+  };
+
+  const isLoading = eventsLoading || usersLoading || addEventLoading || updateEventLoading || deleteEventLoading;
+  const errorMessage = eventsError?.message ?? usersError?.message ?? '';
+
+  if (isLoading && mappedEvents.length === 0) {
+    return <div className="loading">Chargement de l’administration...</div>;
+  }
+
+  if (errorMessage && mappedEvents.length === 0) {
+    return <div className="error">Erreur lors du chargement de l’administration : {errorMessage}</div>;
+  }
 
   return (
     <div className="event-manager">
@@ -230,7 +310,7 @@ const EventManager: React.FC<EventManagerProps> = ({
           <Settings size={20} />
           Administration
         </h2>
-        <span className="mock-data-indicator">Interface factice - TODO: GraphQL</span>
+        <span className="mock-data-indicator">Données GraphQL</span>
       </div>
 
       <div className="admin-tabs">
@@ -286,8 +366,7 @@ const EventManager: React.FC<EventManagerProps> = ({
             <div className="event-form-container">
               <h3>Créer un nouvel événement</h3>
               <p className="form-help">
-                💡 Ce formulaire est fonctionnel mais utilise des données factices. 
-                Les étudiants devront l'intégrer avec GraphQL.
+                💡 Créez un événement en sélectionnant un organisateur et des participants existants.
               </p>
               
               <form onSubmit={handleSubmit} className="event-form">
@@ -307,40 +386,6 @@ const EventManager: React.FC<EventManagerProps> = ({
                       required
                     />
                   </div>
-                  
-                  <div className="form-group">
-                    <label htmlFor="category">
-                      <Hash size={16} />
-                      Catégorie *
-                    </label>
-                    <select
-                      id="category"
-                      name="category"
-                      value={formData.category}
-                      onChange={handleInputChange}
-                      required
-                    >
-                      {categories.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="description">
-                    <FileText size={16} />
-                    Description *
-                  </label>
-                  <textarea
-                    id="description"
-                    name="description"
-                    value={formData.description}
-                    onChange={handleInputChange}
-                    placeholder="Décrivez votre événement..."
-                    rows={3}
-                    required
-                  />
                 </div>
 
                 <div className="form-row">
@@ -352,50 +397,76 @@ const EventManager: React.FC<EventManagerProps> = ({
                     <input
                       type="datetime-local"
                       id="date"
-                      name="date"
-                      value={formData.date}
+                      name="start"
+                      value={formData.start}
                       onChange={handleInputChange}
                       required
                     />
                   </div>
                   
                   <div className="form-group">
-                    <label htmlFor="maxParticipants">
-                      <Users size={16} />
-                      Nb. max participants
+                    <label htmlFor="end">
+                      <Calendar size={16} />
+                      Date de fin
                     </label>
                     <input
-                      type="number"
-                      id="maxParticipants"
-                      name="maxParticipants"
-                      value={formData.maxParticipants}
+                      type="datetime-local"
+                      id="end"
+                      name="end"
+                      value={formData.end}
                       onChange={handleInputChange}
-                      min="1"
-                      max="1000"
                     />
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label htmlFor="location">
-                    <MapPin size={16} />
-                    Lieu *
-                  </label>
-                  <input
-                    type="text"
-                    id="location"
-                    name="location"
-                    value={formData.location}
-                    onChange={handleInputChange}
-                    placeholder="Ex: Paris, France ou En ligne"
-                    required
-                  />
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="organizerId">
+                      <UserPlus size={16} />
+                      Organisateur *
+                    </label>
+                    <select
+                      id="organizerId"
+                      name="organizerId"
+                      value={formData.organizerId}
+                      onChange={handleInputChange}
+                      required
+                    >
+                      <option value="">Sélectionnez un organisateur</option>
+                      {users.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="participantIds">
+                      <Users size={16} />
+                      Participants
+                    </label>
+                    <select
+                      id="participantIds"
+                      name="participantIds"
+                      multiple
+                      value={formData.participantIds}
+                      onChange={handleInputChange}
+                    >
+                      {users.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.name}
+                        </option>
+                      ))}
+                    </select>
+                    <small>Sélectionnez plusieurs utilisateurs en maintenant Ctrl (Windows) ou ⌘ (Mac).</small>
+                  </div>
                 </div>
 
                 <div className="form-actions">
                   <button type="submit" className="btn-submit">
                     <CheckCircle size={16} />
-                    Créer l'événement (Simulation)
+                    Créer l'événement
                   </button>
                   <button 
                     type="button" 
@@ -413,11 +484,11 @@ const EventManager: React.FC<EventManagerProps> = ({
                     TODOs pour les étudiants :
                   </h4>
                   <ul>
-                    <li>Créer la mutation CREATE_EVENT dans queries.ts</li>
-                    <li>Remplacer la simulation par useMutation</li>
-                    <li>Gérer les erreurs et le loading state</li>
-                    <li>Ajouter la validation côté serveur</li>
-                    <li>Implémenter la modification et suppression</li>
+                    <li>Étendre le schéma pour gérer description, lieu et catégorie.</li>
+                    <li>Ajouter des contrôles avancés (statut, capacité maximale, etc.).</li>
+                    <li>Mettre en place une gestion d'erreurs plus poussée (toasts, retry).</li>
+                    <li>Ajouter la recherche et la pagination des événements.</li>
+                    <li>Implémenter la modification et la suppression complètes côté serveur.</li>
                   </ul>
                 </div>
               </form>
@@ -426,15 +497,15 @@ const EventManager: React.FC<EventManagerProps> = ({
 
           {/* Liste des événements existants */}
           <div className="events-management-list">
-            <h3>Événements existants ({mockEvents.length})</h3>
+            <h3>Événements existants ({mappedEvents.length})</h3>
             <div className="events-management-grid">
-              {mockEvents.map((event) => (
+              {mappedEvents.map((event) => (
                 <div key={event.id} className="event-management-card">
                   <div className="event-card-header">
                     <div>
                       <h4>{event.title}</h4>
-                      <span className={`category-badge ${event.category.toLowerCase()}`}>
-                        {event.category}
+                      <span className={`category-badge ${event.category?.toLowerCase() ?? 'general'}`}>
+                        {event.category ?? 'Général'}
                       </span>
                     </div>
                     
@@ -468,7 +539,7 @@ const EventManager: React.FC<EventManagerProps> = ({
                   <div className="event-meta-mini">
                     <div className="meta-item">
                       <Calendar size={14} />
-                      {new Date(event.date).toLocaleDateString('fr-FR')}
+                      {new Date(event.date.start).toLocaleDateString('fr-FR')}
                     </div>
                     <div className="meta-item">
                       <MapPin size={14} />
@@ -476,7 +547,8 @@ const EventManager: React.FC<EventManagerProps> = ({
                     </div>
                     <div className="meta-item">
                       <Users size={14} />
-                      {event.currentParticipants}/{event.maxParticipants}
+                      {event.currentParticipants}
+                      {typeof event.maxParticipants === 'number' ? `/${event.maxParticipants}` : ''} participants
                     </div>
                   </div>
                 </div>
@@ -521,87 +593,80 @@ const EventManager: React.FC<EventManagerProps> = ({
                   required
                 />
               </div>
-              
-              <div className="form-group">
-                <label htmlFor="edit-category">
-                  <Hash size={16} />
-                  Catégorie *
-                </label>
-                <select
-                  id="edit-category"
-                  name="category"
-                  value={formData.category}
-                  onChange={handleInputChange}
-                  required
-                >
-                  {categories.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="edit-description">
-                <FileText size={16} />
-                Description *
-              </label>
-              <textarea
-                id="edit-description"
-                name="description"
-                value={formData.description}
-                onChange={handleInputChange}
-                rows={3}
-                required
-              />
             </div>
 
             <div className="form-row">
               <div className="form-group">
-                <label htmlFor="edit-date">
+                <label htmlFor="edit-start">
                   <Calendar size={16} />
-                  Date *
+                  Date de début *
                 </label>
                 <input
                   type="datetime-local"
-                  id="edit-date"
-                  name="date"
-                  value={formData.date}
+                  id="edit-start"
+                  name="start"
+                  value={formData.start}
                   onChange={handleInputChange}
                   required
                 />
               </div>
               
               <div className="form-group">
-                <label htmlFor="edit-maxParticipants">
-                  <Users size={16} />
-                  Nb. max participants
+                <label htmlFor="edit-end">
+                  <Calendar size={16} />
+                  Date de fin
                 </label>
                 <input
-                  type="number"
-                  id="edit-maxParticipants"
-                  name="maxParticipants"
-                  value={formData.maxParticipants}
+                  type="datetime-local"
+                  id="edit-end"
+                  name="end"
+                  value={formData.end}
                   onChange={handleInputChange}
-                  min="1"
-                  max="1000"
                 />
               </div>
             </div>
 
-            <div className="form-group">
-              <label htmlFor="edit-location">
-                <MapPin size={16} />
-                Lieu *
-              </label>
-              <input
-                type="text"
-                id="edit-location"
-                name="location"
-                value={formData.location}
-                onChange={handleInputChange}
-                required
-              />
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="edit-organizer">
+                  <UserPlus size={16} />
+                  Organisateur *
+                </label>
+                <select
+                  id="edit-organizer"
+                  name="organizerId"
+                  value={formData.organizerId}
+                  onChange={handleInputChange}
+                  required
+                >
+                  <option value="">Sélectionnez un organisateur</option>
+                  {users.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="edit-participantIds">
+                  <Users size={16} />
+                  Participants
+                </label>
+                <select
+                  id="edit-participantIds"
+                  name="participantIds"
+                  multiple
+                  value={formData.participantIds}
+                  onChange={handleInputChange}
+                >
+                  {users.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="form-actions">
@@ -628,6 +693,7 @@ const EventManager: React.FC<EventManagerProps> = ({
         onClose={() => {
           setShowAssignModal(false);
           setAssigningEvent(null);
+          setAssignParticipants([]);
         }}
         title="Gérer les participants"
         size="large"
@@ -635,17 +701,39 @@ const EventManager: React.FC<EventManagerProps> = ({
         {assigningEvent && (
           <div className="assign-users-content">
             <h3>Événement: {assigningEvent.title}</h3>
-            <p>TODO: Interface d'assignation d'utilisateurs à implémenter avec GraphQL</p>
-            <div className="todo-section">
-              <h4>Fonctionnalités à développer:</h4>
-              <ul>
-                <li>Liste des utilisateurs disponibles</li>
-                <li>Liste des participants actuels</li>
-                <li>Boutons d'ajout/suppression de participants</li>
-                <li>Recherche et filtres d'utilisateurs</li>
-                <li>Gestion des rôles (participant, co-organisateur)</li>
-              </ul>
+            <div className="assign-users-list">
+              {users.map((user) => {
+                const checked = assignParticipants.includes(user.id);
+                return (
+                  <label key={user.id} className="assign-user-item">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => handleAssignChange(user.id, event.target.checked)}
+                    />
+                    <span>{user.name}</span>
+                  </label>
+                );
+              })}
             </div>
+            <div className="assign-actions">
+              <button className="btn-submit" onClick={handleAssignSave}>
+                <CheckCircle size={16} />
+                Enregistrer
+              </button>
+              <button
+                className="btn-cancel"
+                onClick={() => {
+                  setShowAssignModal(false);
+                  setAssigningEvent(null);
+                  setAssignParticipants([]);
+                }}
+              >
+                <X size={16} />
+                Annuler
+              </button>
+            </div>
+            <small>💡 L'ajout ou la suppression de participants met immédiatement à jour l'événement via GraphQL.</small>
           </div>
         )}
       </Modal>
