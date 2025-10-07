@@ -16,11 +16,11 @@ interface UserDetailsProps {
   user: {
     id: string;
     name: string;
-    email: string;
-    role: string;
-    eventsOrganized: number;
-    eventsAttended: number;
-    joinDate: string;
+    email?: string;
+    role?: string;
+    eventsOrganized?: number;
+    eventsAttended?: number;
+    joinDate?: string;
   };
   currentUser?: {
     id: string;
@@ -56,6 +56,15 @@ const UserDetails: React.FC<UserDetailsProps> = ({
     }
   ];
 
+  const role = user.role ?? 'Membre';
+  const roleClass = role.toLowerCase().replace(/\s+/g, '-');
+  const joinDateLabel = user.joinDate
+    ? new Date(user.joinDate).toLocaleDateString('fr-FR')
+    : 'Date inconnue';
+  const email = user.email ?? 'Email non communiqué';
+  const organizedCount = user.eventsOrganized ?? 0;
+  const attendedCount = user.eventsAttended ?? 0;
+
   return (
     <div className="user-details">
       <div className="user-details-header">
@@ -68,13 +77,13 @@ const UserDetails: React.FC<UserDetailsProps> = ({
           </div>
           <div className="user-profile-info">
             <h1>{user.name}</h1>
-            <span className={`role-badge ${user.role.toLowerCase().replace(' ', '-')}`}>
-              {user.role === 'Organisateur' ? <Award size={16} /> : <Activity size={16} />}
-              {user.role}
+            <span className={`role-badge ${roleClass}`}>
+              {role === 'Organisateur' ? <Award size={16} /> : <Activity size={16} />}
+              {role}
             </span>
             <p className="user-member-since">
               <Calendar size={14} />
-              Membre depuis {new Date(user.joinDate).toLocaleDateString('fr-FR')}
+              Membre depuis {joinDateLabel}
             </p>
           </div>
         </div>
@@ -120,7 +129,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({
               <Mail size={20} />
               <div>
                 <strong>Email</strong>
-                <p>{user.email}</p>
+                <p>{email}</p>
               </div>
             </div>
             
@@ -139,7 +148,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({
                 <Award size={24} />
               </div>
               <div className="stat-content">
-                <span className="stat-number">{user.eventsOrganized}</span>
+                <span className="stat-number">{organizedCount}</span>
                 <span className="stat-label">Événements organisés</span>
                 <span className="stat-description">
                   Total des événements créés et gérés
@@ -152,7 +161,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({
                 <Activity size={24} />
               </div>
               <div className="stat-content">
-                <span className="stat-number">{user.eventsAttended}</span>
+                <span className="stat-number">{attendedCount}</span>
                 <span className="stat-label">Événements suivis</span>
                 <span className="stat-description">
                   Total des participations aux événements

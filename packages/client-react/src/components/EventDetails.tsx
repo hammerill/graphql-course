@@ -16,17 +16,25 @@ interface EventDetailsProps {
   event: {
     id: string;
     title: string;
-    description: string;
-    date: string;
-    location: string;
-    maxParticipants: number;
-    currentParticipants: number;
-    category: string;
+    description?: string;
+    date: {
+      start: string;
+      end: string;
+    };
+    location?: string;
+    maxParticipants?: number;
+    currentParticipants?: number;
+    category?: string;
     organizer: {
       id: string;
       name: string;
-      email: string;
+      email?: string;
     };
+    participants?: Array<{
+      id: string;
+      name: string;
+      email?: string;
+    }>;
   };
   currentUser?: {
     id: string;
@@ -44,24 +52,35 @@ const EventDetails: React.FC<EventDetailsProps> = ({
   onRegister,
   onUnregister
 }) => {
-  // TODO: Récupérer les participants via GraphQL
-  const mockParticipants = [
-    { id: '1', name: 'Alice Dupont', email: 'alice@example.com' },
-    { id: '2', name: 'Bob Martin', email: 'bob@example.com' },
-    { id: '3', name: 'Claire Durand', email: 'claire@example.com' }
-  ];
-
+  const participants = event.participants ?? [];
+  const participantCount = event.currentParticipants ?? participants.length;
+  const maxParticipants = event.maxParticipants ?? (participantCount > 0 ? participantCount : undefined);
+  const capacity = maxParticipants ?? participantCount ?? 0;
+  const hasCapacity = typeof maxParticipants === 'number';
+  const availableSpots = hasCapacity ? Math.max((maxParticipants ?? 0) - participantCount, 0) : undefined;
   const isOrganizer = currentUser?.id === event.organizer.id;
-  const availableSpots = event.maxParticipants - event.currentParticipants;
-  const isFull = availableSpots <= 0;
+  const isFull = hasCapacity ? (availableSpots ?? 0) <= 0 : false;
+  const categoryLabel = event.category ?? 'General';
+  const categoryClass = categoryLabel.toLowerCase().replace(/\s+/g, '-');
+  const startDate = event.date?.start ? new Date(event.date.start) : null;
+  const endDate = event.date?.end ? new Date(event.date.end) : null;
+  const dateRangeLabel =
+    startDate && endDate
+      ? `${startDate.toLocaleString('fr-FR')} - ${endDate.toLocaleString('fr-FR')}`
+      : startDate
+        ? startDate.toLocaleString('fr-FR')
+        : 'Date non communiquée';
+  const progress = hasCapacity && maxParticipants
+    ? Math.min((participantCount / maxParticipants) * 100, 100)
+    : 100;
 
   return (
     <div className="event-details">
       <div className="event-details-header">
         <div className="event-title-section">
           <h1>{event.title}</h1>
-          <span className={`category-badge ${event.category.toLowerCase()}`}>
-            {event.category}
+          <span className={`category-badge ${categoryClass}`}>
+            {categoryLabel}
           </span>
         </div>
         
@@ -112,14 +131,14 @@ const EventDetails: React.FC<EventDetailsProps> = ({
       <div className="event-details-content">
         <div className="event-info-section">
           <h3>Description</h3>
-          <p className="event-description">{event.description}</p>
+          <p className="event-description">{event.description ?? 'Description non disponible'}</p>
           
           <div className="event-meta">
             <div className="meta-item">
               <Calendar size={20} />
               <div>
                 <strong>Date et heure</strong>
-                <p>{new Date(event.date).toLocaleString('fr-FR')}</p>
+                <p>{dateRangeLabel}</p>
               </div>
             </div>
             
@@ -127,7 +146,7 @@ const EventDetails: React.FC<EventDetailsProps> = ({
               <MapPin size={20} />
               <div>
                 <strong>Lieu</strong>
-                <p>{event.location}</p>
+                <p>{event.location ?? 'Lieu non communiqué'}</p>
               </div>
             </div>
             
@@ -138,7 +157,7 @@ const EventDetails: React.FC<EventDetailsProps> = ({
                 <p>{event.organizer.name}</p>
                 <p className="organizer-email">
                   <Mail size={14} />
-                  {event.organizer.email}
+                  {event.organizer.email ?? 'Email non communiqué'}
                 </p>
               </div>
             </div>
@@ -149,42 +168,49 @@ const EventDetails: React.FC<EventDetailsProps> = ({
           <div className="participants-header">
             <h3>
               <Users size={20} />
-              Participants ({event.currentParticipants}/{event.maxParticipants})
+              Participants
+              {hasCapacity
+                ? ` (${participantCount}/${capacity})`
+                : ` (${participantCount})`}
             </h3>
             <span className="spots-indicator">
-              {availableSpots > 0 ? (
-                <span className="available">
-                  {availableSpots} place{availableSpots > 1 ? 's' : ''} disponible{availableSpots > 1 ? 's' : ''}
-                </span>
+              {hasCapacity ? (
+                availableSpots && availableSpots > 0 ? (
+                  <span className="available">
+                    {availableSpots} place{availableSpots > 1 ? 's' : ''} disponible{availableSpots > 1 ? 's' : ''}
+                  </span>
+                ) : (
+                  <span className="full">Complet</span>
+                )
               ) : (
-                <span className="full">Complet</span>
+                <span className="available">Capacité libre</span>
               )}
             </span>
           </div>
           
-            <div className="progress-bar">
-              <div 
-                className="progress-fill"
-                style={{ width: `${(event.currentParticipants / event.maxParticipants) * 100}%` }}
-              ></div>
-            </div>
+          <div className="progress-bar">
+            <div 
+              className="progress-fill"
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
 
           <div className="participants-list">
-            <div className="todo-section">
-              <p>
-                <strong>TODO GraphQL:</strong> Afficher la vraie liste des participants
-              </p>
-              <small>Les données ci-dessous sont factices pour la démonstration</small>
-            </div>
-            
-            {mockParticipants.slice(0, event.currentParticipants).map((participant) => (
+            {participants.length === 0 && (
+              <div className="empty-participants">
+                Aucun participant pour le moment.
+              </div>
+            )}
+            {participants.map((participant) => (
               <div key={participant.id} className="participant-item">
                 <div className="participant-avatar">
                   <User size={16} />
                 </div>
                 <div className="participant-info">
                   <span className="participant-name">{participant.name}</span>
-                  <span className="participant-email">{participant.email}</span>
+                  <span className="participant-email">
+                    {participant.email ?? 'Email non communiqué'}
+                  </span>
                 </div>
                 {isOrganizer && (
                   <button className="btn-remove-participant" disabled>

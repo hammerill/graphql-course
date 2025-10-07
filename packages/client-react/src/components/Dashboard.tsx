@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { 
   Calendar, 
   Users, 
@@ -9,8 +9,9 @@ import {
   CalendarPlus,
   Activity
 } from 'lucide-react';
+import { useQuery } from '@apollo/client';
+import { GET_EVENTS, GET_USERS } from '../queries';
 
-// TODO: Remplacer par des données GraphQL
 interface DashboardStats {
   totalEvents: number;
   totalUsers: number;
@@ -20,51 +21,162 @@ interface DashboardStats {
   averageParticipation: number;
 }
 
+interface DateRange {
+  start: string;
+  end: string;
+}
+
+interface EventUser {
+  id: string;
+  name: string;
+}
+
+interface Event {
+  id: string;
+  title: string;
+  date: DateRange;
+  organizer: EventUser;
+  participants?: EventUser[];
+  maxParticipants?: number;
+  category?: string;
+}
+
+interface EventsData {
+  events: Event[];
+}
+
+interface User {
+  id: string;
+  name: string;
+}
+
+interface UsersData {
+  users: User[];
+}
+
 const Dashboard: React.FC = () => {
-  // TODO: Récupérer ces données via GraphQL
-  const stats: DashboardStats = {
-    totalEvents: 12,
-    totalUsers: 45,
-    activeEvents: 3,
-    upcomingEvents: 7,
-    totalParticipants: 156,
-    averageParticipation: 78
-  };
+  const { data: eventsData, loading: eventsLoading, error: eventsError } = useQuery<EventsData>(GET_EVENTS);
+  const { data: usersData, loading: usersLoading, error: usersError } = useQuery<UsersData>(GET_USERS);
 
-  // TODO: Récupérer les événements récents via GraphQL
-  const recentEvents = [
-    {
-      id: '1',
-      title: 'Workshop GraphQL pour débutants',
-      date: '2025-10-15',
-      participants: 18,
-      maxParticipants: 30,
-      status: 'upcoming'
-    },
-    {
-      id: '2',
-      title: 'Conférence React + GraphQL',
-      date: '2025-11-20',
-      participants: 45,
-      maxParticipants: 100,
-      status: 'upcoming'
-    },
-    {
-      id: '3',
-      title: 'Hackathon GraphQL',
-      date: '2025-12-05',
-      participants: 23,
-      maxParticipants: 50,
-      status: 'upcoming'
-    }
-  ];
+  const isLoading = eventsLoading || usersLoading;
+  const errorMessage = eventsError?.message ?? usersError?.message ?? '';
 
-  // TODO: Récupérer les utilisateurs actifs via GraphQL
-  const activeUsers = [
-    { id: '1', name: 'Alice Dupont', role: 'Organisateur', eventsCount: 5 },
-    { id: '2', name: 'Bob Martin', role: 'Participant', eventsCount: 8 },
-    { id: '3', name: 'Claire Durand', role: 'Organisateur', eventsCount: 3 }
-  ];
+  const events = eventsData?.events ?? [];
+  const users = usersData?.users ?? [];
+
+  const userNameLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    users.forEach((user) => map.set(user.id, user.name));
+    return map;
+  }, [users]);
+
+  const stats: DashboardStats = useMemo(() => {
+    const now = new Date();
+    let totalParticipants = 0;
+    let activeEvents = 0;
+    let upcomingEvents = 0;
+
+    events.forEach((event) => {
+      const start = event.date?.start ? new Date(event.date.start) : null;
+      const end = event.date?.end ? new Date(event.date.end) : null;
+      const participantsCount = event.participants?.length ?? 0;
+      totalParticipants += participantsCount;
+
+      if (start && end) {
+        if (start <= now && end >= now) {
+          activeEvents += 1;
+        }
+      }
+
+      if (start && start > now) {
+        upcomingEvents += 1;
+      }
+    });
+
+    const totalEvents = events.length;
+    const averageParticipation = totalEvents > 0 ? Math.round(totalParticipants / totalEvents) : 0;
+
+    return {
+      totalEvents,
+      totalUsers: users.length,
+      activeEvents,
+      upcomingEvents,
+      totalParticipants,
+      averageParticipation
+    };
+  }, [events, users]);
+
+  const recentEvents = useMemo(() => {
+    const now = new Date();
+    return [...events]
+      .sort((a, b) => {
+        const aDate = a.date?.start ? new Date(a.date.start).getTime() : 0;
+        const bDate = b.date?.start ? new Date(b.date.start).getTime() : 0;
+        return aDate - bDate;
+      })
+      .slice(0, 3)
+      .map((event) => {
+        const start = event.date?.start ? new Date(event.date.start) : null;
+        const end = event.date?.end ? new Date(event.date.end) : null;
+        const status =
+          start && end && start <= now && end >= now
+            ? 'active'
+            : start && start > now
+              ? 'upcoming'
+              : 'past';
+        return {
+          ...event,
+          start,
+          end,
+          status,
+          participantsCount: event.participants?.length ?? 0,
+        };
+      });
+  }, [events]);
+
+  const activeUsers = useMemo(() => {
+    const activity = new Map<string, { id: string; name: string; organized: number; attended: number }>();
+
+    const ensureActivity = (userId: string, fallbackName: string) => {
+      if (!activity.has(userId)) {
+        activity.set(userId, {
+          id: userId,
+          name: userNameLookup.get(userId) ?? fallbackName,
+          organized: 0,
+          attended: 0
+        });
+      }
+      return activity.get(userId)!;
+    };
+
+    events.forEach((event) => {
+      const organizer = ensureActivity(event.organizer.id, event.organizer.name);
+      organizer.organized += 1;
+
+      event.participants?.forEach((participant) => {
+        const participantEntry = ensureActivity(participant.id, participant.name);
+        participantEntry.attended += 1;
+      });
+    });
+
+    return [...activity.values()]
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        role: entry.organized >= entry.attended ? 'Organisateur' : 'Participant',
+        eventsCount: entry.organized + entry.attended,
+      }))
+      .sort((a, b) => b.eventsCount - a.eventsCount)
+      .slice(0, 3);
+  }, [events, userNameLookup]);
+
+  if (isLoading) {
+    return <div className="loading">Chargement du tableau de bord...</div>;
+  }
+
+  if (errorMessage) {
+    return <div className="error">Erreur lors du chargement du tableau de bord : {errorMessage}</div>;
+  }
 
   const StatCard: React.FC<{
     icon: React.ReactNode;
@@ -101,7 +213,7 @@ const Dashboard: React.FC = () => {
           <p>Vue d'ensemble de votre plateforme d'événements</p>
         </div>
         <div className="header-actions">
-          <span className="mock-data-indicator">Données factices - TODO: GraphQL</span>
+          <span className="mock-data-indicator">Données GraphQL</span>
         </div>
       </div>
 
@@ -154,23 +266,28 @@ const Dashboard: React.FC = () => {
                 <div className="event-summary-header">
                   <h3>{event.title}</h3>
                   <span className={`status-badge ${event.status}`}>
-                    {event.status === 'upcoming' ? 'À venir' : 'En cours'}
+                    {event.status === 'active' ? 'En cours' : event.status === 'upcoming' ? 'À venir' : 'Passé'}
                   </span>
                 </div>
                 <div className="event-summary-details">
                   <div className="detail-item">
                     <Clock size={14} />
-                    {new Date(event.date).toLocaleDateString('fr-FR')}
+                    {event.start ? event.start.toLocaleDateString('fr-FR') : 'Date inconnue'}
                   </div>
                   <div className="detail-item">
                     <Users size={14} />
-                    {event.participants}/{event.maxParticipants} participants
+                    {event.participantsCount}
+                    {event.maxParticipants ? `/${event.maxParticipants}` : ''} participants
                   </div>
                 </div>
                 <div className="participation-bar">
                   <div 
                     className="participation-fill"
-                    style={{ width: `${(event.participants / event.maxParticipants) * 100}%` }}
+                    style={{
+                      width: event.maxParticipants
+                        ? `${Math.min((event.participantsCount / event.maxParticipants) * 100, 100)}%`
+                        : '100%'
+                    }}
                   ></div>
                 </div>
               </div>
@@ -189,7 +306,7 @@ const Dashboard: React.FC = () => {
               Gérer (TODO: GraphQL)
             </button>
           </div>
-          
+                  
           <div className="users-summary">
             {activeUsers.map((user) => (
               <div key={user.id} className="user-summary-card">
@@ -201,7 +318,7 @@ const Dashboard: React.FC = () => {
                   <span className={`role-badge ${user.role.toLowerCase()}`}>
                     {user.role}
                   </span>
-                  <p>{user.eventsCount} événements</p>
+                  <p>{user.eventsCount} participation{user.eventsCount > 1 ? 's' : ''}</p>
                 </div>
                 <div className="user-summary-actions">
                   <button className="btn-icon" disabled title="Voir profil (TODO: GraphQL)">

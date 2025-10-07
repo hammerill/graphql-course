@@ -10,10 +10,6 @@ import './App.css';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
-  
-  // TODO: Le client Apollo est importé depuis apollo-client.ts
-  // TODO: Assurez-vous que la configuration Apollo est correcte avant d'utiliser l'application
-
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
